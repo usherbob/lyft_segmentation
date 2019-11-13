@@ -12,6 +12,8 @@ import torch.nn.functional as F
 import torch.utils.data
 
 from model import *
+from tensorboardX import SummaryWriter
+import shutil
 
 class BEVImageDataset(torch.utils.data.Dataset):
     def __init__(self, input_filepaths, target_filepaths, map_filepaths=None):
@@ -46,6 +48,7 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--multi_gpu",action='store_true', help="whether use multi_gpu")
     parser.add_argument("--ckpt", type=str, default="ckpt/", help="path to store checkpoint file")
+    parser.add_argument("--log_dir", type=str, default="log/", help="path to store checkpoint file")
     parser.add_argument("--data_folder", type=str, default="data/lyft_bev", help="path to load bev data")
     parser.add_argument("--batch_size", type=int, default=2, help="batch size to load data")
     parser.add_argument("--reslayers", type=int, default=34, help="choose resnet layers from [18, 34, 50]")
@@ -55,6 +58,11 @@ if __name__=="__main__":
     parser.add_argument("--start_epoch", type=int, default=1, help="Start Training Epoch")
     params = parser.parse_args()
     print(params) 
+    if os.path.isdir(params.log_dir):
+        print('Remove existing log dir: ', params.log_dir)
+        shutil.rmtree(params.log_dir)
+    os.mkdir(params.log_dir)
+    writer = SummaryWriter(params.log_dir)
     classes = ["car", "motorcycle", "bus", "bicycle", "truck", "pedestrian", 
             "other_vehicle", "animal", "emergency_vehicle"]
     batch_size = params.batch_size
@@ -87,8 +95,8 @@ if __name__=="__main__":
     if params.multi_gpu:
         model = nn.DataParallel(model)
     model = model.to(device)
-    optim = torch.optim.Adam(model.parameters(), lr = 1e-4)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, 0.7) #optimizer, gamma, last_epoch
+    optim = torch.optim.Adam(model.parameters(), lr = 1e-5)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optim, 0.9) #optimizer, gamma, last_epoch
     train_losses = []
     ckpt_path = os.path.join(params.ckpt, "resnet{}/".format(params.reslayers))
     os.makedirs(ckpt_path, exist_ok=True)
@@ -104,6 +112,7 @@ if __name__=="__main__":
             target = target.to(device)  # [N, H, W] with class indices (0, 1)
             prediction = model(X)  # [N, 2, H, W]
             loss = F.cross_entropy(prediction, target, weight=class_weights)
+            writer.add_scalar('loss', loss, len(trainloader)*(epoch-params.start_epoch)+ii)
             optim.zero_grad()
             loss.backward()
             optim.step()        
@@ -111,6 +120,7 @@ if __name__=="__main__":
             #if ii == 0:            
             #   visualize_predictions(X, prediction, target)    
         train_loss = np.mean(train_epoch_losses)
+        writer.add_scalar('train_loss', train_loss, epoch)
         train_losses.append(train_loss)
         #print("Train Loss:", train_loss)
         checkpoint_filename = "resnet_epoch_{}.pth".format(epoch)
